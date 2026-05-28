@@ -1,16 +1,16 @@
 """
 Remote Sensing Image Analysis Demo
-Two complementary tracks:
+Self-contained — no external data needed.
 
-Track 1 - GEE Composite Analysis:
-  Load real remote sensing data (NDVI, LST, NDBSI composites)
-  Compute statistics, histogram, K-means clustering for land cover
-  These are standard remote sensing workflows
+Track 1 - Synthetic RS Image + K-Means Land Cover Classification:
+  Generates a realistic satellite-view image (water, forest, agriculture,
+  urban, bare soil), then applies unsupervised K-means clustering to
+  separate land cover types. A standard remote sensing workflow.
 
-Track 2 - Deep Learning Semantic Segmentation:
-  Uses DeepLabV3 (pre-trained on COCO) for scene segmentation
-  Runs on generated urban landscape + screenshot
-  Same architecture used in satellite image segmentation
+Track 2 - DeepLabV3 Semantic Segmentation:
+  Pre-trained on COCO (real-world scenes). Demonstrates the deep learning
+  pipeline for pixel-wise classification. Note: for optimal RS results,
+  fine-tune on remote sensing datasets like DeepGlobe or ISPRS.
 """
 
 import os
@@ -18,7 +18,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from PIL import Image, ImageDraw, ImageGrab
+from PIL import Image, ImageDraw, ImageFilter
 from sklearn.cluster import KMeans
 import torch
 import torchvision.transforms as T
@@ -31,88 +31,187 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SEED = 42
 np.random.seed(SEED)
 
+# Color table for K-means cluster visualization
+CLUSTER_COLORS = np.array([
+    [255, 0, 0], [0, 255, 0], [0, 0, 255],
+    [255, 255, 0], [255, 0, 255], [0, 255, 255],
+    [128, 128, 128], [255, 128, 0], [128, 0, 255],
+], dtype=np.uint8)
 
-# ---- Track 1: GEE Remote Sensing Analysis --------------------------------
 
-def analyze_gee():
-    """Analyze real GEE remote sensing composites with K-means clustering."""
-    gee_files = sorted([f for f in os.listdir(GEE_DIR)
-                        if f.lower().endswith((".png", ".jpg"))])
-    if not gee_files:
-        print("[!] No GEE images found.")
-        return None
+# ========== Track 1: Synthetic RS Image + K-Means ============================
 
-    preferred = sorted([f for f in gee_files if "final" in f.lower()])
-    chosen = preferred[0] if preferred else gee_files[0]
-    gee_path = os.path.join(GEE_DIR, chosen)
-    img = Image.open(gee_path).convert("RGB")
-    arr = np.array(img)
-    h, w = arr.shape[:2]
 
-    print("\n  Input: {}".format(chosen))
-    print("  Size: {} x {} pixels".format(w, h))
+def generate_synthetic_rs_image(size=(512, 512)):
+    """Generate a realistic synthetic satellite image with varied land cover.
 
-    # Downsample for faster processing (keep aspect ratio)
+    Simulates a true-color satellite view containing:
+      - Lake / river network  (deep blue)
+      - Dense forest          (dark green)
+      - Agricultural fields   (patterned green / tan)
+      - Urban area            (gray, rectilinear)
+      - Bare soil / fallow    (brown)
+    """
+    w, h = size
+    base = Image.new("RGB", (w, h))
+    draw = ImageDraw.Draw(base)
+
+    # --- Background: bare soil / sparse vegetation ---
+    draw.rectangle([0, 0, w, h], fill=(168, 145, 105))
+
+    # --- Lake (top-left) ---
+    draw.ellipse([25, 20, 195, 185], fill=(50, 86, 146))
+    # Depth gradient
+    for r in range(5):
+        s = 5 - r
+        c = (42 + s*2, 78 + s*2, 138 + s*2)
+        draw.ellipse([45 + r*5, 40 + r*5, 175 - r*5, 165 - r*5], fill=c)
+
+    # --- River from lake flowing southeast ---
+    river = [(180, 155), (215, 178), (228, 200), (232, 222),
+             (225, 245), (208, 265), (185, 282)]
+    draw.line(river, fill=(48, 84, 144), width=18)
+
+    # --- Forest (top-right) ---
+    draw.rectangle([250, 15, 505, 185], fill=(40, 100, 40))
+    for _ in range(50):
+        x = np.random.randint(255, 500)
+        y = np.random.randint(20, 180)
+        r = np.random.randint(8, 20)
+        s = np.random.randint(35, 115)
+        draw.ellipse([x-r, y-r, x+r, y+r], fill=(s, s+8, s-12))
+
+    # --- Forest (bottom-right) ---
+    draw.rectangle([360, 350, 505, 495], fill=(36, 96, 36))
+    for _ in range(25):
+        x = np.random.randint(365, 500)
+        y = np.random.randint(355, 490)
+        r = np.random.randint(8, 16)
+        s = np.random.randint(32, 100)
+        draw.ellipse([x-r, y-r, x+r, y+r], fill=(s, s+8, s-12))
+
+    # --- Agricultural fields (bottom-left, 4x3 grid) ---
+    palettes = [(140, 166, 80), (160, 140, 70), (118, 153, 88), (168, 128, 52)]
+    for row in range(4):
+        for col in range(3):
+            x = 15 + col * 83
+            y = 255 + row * 55
+            c = palettes[(row + col) % len(palettes)]
+            v = np.random.randint(-8, 8)
+            draw.rectangle([x, y, x+73, y+45], fill=(c[0]+v, c[1]+v, c[2]+v))
+
+    # --- Urban area (center-right) ---
+    for bx in [215, 262, 310, 358]:
+        for by in [255, 300, 345]:
+            c = np.random.randint(145, 210)
+            draw.rectangle([bx, by, bx+40, by+35], fill=(c, c, c))
+            roof = np.random.randint(60, 130)
+            draw.rectangle([bx+3, by+3, bx+37, by+10], fill=(roof, roof-5, roof-8))
+
+    # --- Road network ---
+    draw.rectangle([235, 295, 258, 405], fill=(178, 173, 168))
+    draw.rectangle([195, 335, 360, 358], fill=(182, 177, 172))
+
+    # --- Small vegetation patches ---
+    for _ in range(20):
+        x = np.random.randint(10, w-10)
+        y = np.random.randint(195, 300)
+        px = base.getpixel((x, y))
+        if px != (50, 86, 146) and px != (48, 84, 144):
+            s = np.random.randint(4, 12)
+            shade = np.random.randint(60, 130)
+            draw.ellipse([x-s, y-s, x+s, y+s], fill=(shade, shade+20, shade-20))
+
+    # --- Smooth transitions ---
+    img = base.filter(ImageFilter.GaussianBlur(radius=2))
+
+    # --- Sensor noise ---
+    arr = np.array(img).astype(np.float32)
+    noise = np.random.RandomState(SEED).randn(h, w, 3) * 5
+    arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(arr)
+
+
+def analyze_kmeans(image, n_clusters=5, title="", save_path=None):
+    """Run K-means clustering on an image for land-cover classification.
+
+    Returns list of (cluster_id, percentage, center_rgb) sorted by size.
+    """
+    w, h = image.size
+    arr = np.array(image)
+
+    # Downsample for speed
     scale = min(512 / w, 512 / h, 1.0)
-    small = np.array(img.resize((int(w * scale), int(h * scale))))
+    small = np.array(image.resize((int(w * scale), int(h * scale))))
     pixels = small.reshape(-1, 3).astype(np.float32)
 
-    # K-means clustering (unsupervised land cover classification)
-    n_clusters = 5
-    print("  Running K-means clustering (k={}) ...".format(n_clusters))
+    print("  Running K-means clustering (k={}, {} pixels) ...".format(
+        n_clusters, len(pixels)))
     kmeans = KMeans(n_clusters=n_clusters, random_state=SEED, n_init=5)
     labels = kmeans.fit_predict(pixels)
     label_map = labels.reshape(small.shape[0], small.shape[1])
 
-    # Map cluster centers to colors
-    centers = kmeans.cluster_centers_.astype(np.uint8)
-    cluster_colors = np.array([
-        [255, 0, 0], [0, 255, 0], [0, 0, 255],
-        [255, 255, 0], [255, 0, 255], [0, 255, 255],
-        [128, 128, 128], [255, 128, 0], [128, 0, 255],
-    ])
+    # Build colorized segmentation map
     seg_rgb = np.zeros((*label_map.shape, 3), dtype=np.uint8)
     for i in range(n_clusters):
-        seg_rgb[label_map == i] = cluster_colors[i % len(cluster_colors)]
+        seg_rgb[label_map == i] = CLUSTER_COLORS[i % len(CLUSTER_COLORS)]
 
-    # Statistics per cluster
-    print("\n  Land cover clusters (unsupervised):")
-    cluster_stats = []
+    # Per-cluster statistics
+    centers = kmeans.cluster_centers_.astype(np.uint8)
+    stats = []
     for i in range(n_clusters):
         count = np.sum(label_map == i)
         pct = count / label_map.size * 100
-        color = centers[i]
-        cluster_stats.append((i + 1, pct, color))
-        print("    Cluster {}: {:5.1f}%  (center RGB: {})".format(
-            i + 1, pct, color))
+        stats.append((i + 1, pct, centers[i]))
+        print("    Cluster {}: {:5.1f}%  center RGB ({:3d},{:3d},{:3d})".format(
+            i + 1, pct, centers[i][0], centers[i][1], centers[i][2]))
+    stats.sort(key=lambda x: x[1], reverse=True)
 
-    # Save visualization
+    # Overlay
+    overlay = (small * 0.55 + seg_rgb * 0.45).astype(np.uint8)
+
+    # Figure
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     axes[0].imshow(small)
-    axes[0].set_title("GEE: {}".format(chosen), fontsize=11, fontweight="bold")
+    axes[0].set_title("Input: {}".format(title), fontsize=11, fontweight="bold")
     axes[0].axis("off")
 
     axes[1].imshow(seg_rgb)
-    axes[1].set_title("K-means Clusters (k={})".format(n_clusters), fontsize=11, fontweight="bold")
+    axes[1].set_title("K-means Land Cover (k={})".format(n_clusters),
+                      fontsize=11, fontweight="bold")
     axes[1].axis("off")
 
-    # Combined
-    overlay = (small * 0.6 + seg_rgb * 0.4).astype(np.uint8)
     axes[2].imshow(overlay)
-    axes[2].set_title("Overlay: GEE + Clusters", fontsize=11, fontweight="bold")
+    axes[2].set_title("Overlay: Image + Clusters", fontsize=11, fontweight="bold")
     axes[2].axis("off")
 
     plt.tight_layout()
-    out = os.path.join(RESULTS_DIR, "gee_kmeans_result.png")
-    fig.savefig(out, dpi=150, bbox_inches="tight")
+    fig.savefig(save_path, dpi=150, bbox_inches="tight") if save_path else None
     plt.close(fig)
-    print("[OK] GEE analysis -> {}".format(out))
+    print("[OK] K-means result -> {}".format(save_path))
 
-    return chosen
+    return stats
 
 
-# ---- Track 2: Deep Learning Segmentation ---------------------------------
+# ========== Track 2: DeepLabV3 Semantic Segmentation ========================
+
+CLASS_NAMES = [
+    "background", "road", "sidewalk", "building", "wall", "fence",
+    "pole", "traffic light", "traffic sign", "vegetation", "terrain",
+    "sky", "person", "rider", "car", "truck", "bus", "train",
+    "motorcycle", "bicycle",
+]
+
+COLOUR_PALETTE = np.array([
+    [0, 0, 0], [128, 64, 128], [244, 35, 232], [70, 70, 70],
+    [102, 102, 156], [190, 153, 153], [153, 153, 153], [250, 170, 30],
+    [220, 220, 0], [107, 142, 35], [152, 251, 152], [70, 130, 180],
+    [220, 20, 60], [255, 0, 0], [0, 0, 142], [0, 0, 70],
+    [0, 60, 100], [0, 80, 100], [0, 0, 230], [119, 11, 32],
+], dtype=np.uint8)
+
 
 def make_urban_scene(size=(512, 512)):
     """Generate a synthetic urban scene for segmentation demo."""
@@ -156,21 +255,8 @@ def make_urban_scene(size=(512, 512)):
     return img
 
 
-CLASS_NAMES = ["background", "road", "sidewalk", "building", "wall", "fence",
-               "pole", "traffic light", "traffic sign", "vegetation", "terrain",
-               "sky", "person", "rider", "car", "truck", "bus", "train",
-               "motorcycle", "bicycle"]
-
-COLOUR_PALETTE = np.array([
-    [0, 0, 0], [128, 64, 128], [244, 35, 232], [70, 70, 70],
-    [102, 102, 156], [190, 153, 153], [153, 153, 153], [250, 170, 30],
-    [220, 220, 0], [107, 142, 35], [152, 251, 152], [70, 130, 180],
-    [220, 20, 60], [255, 0, 0], [0, 0, 142], [0, 0, 70],
-    [0, 60, 100], [0, 80, 100], [0, 0, 230], [119, 11, 32],
-], dtype=np.uint8)
-
-
 def load_model():
+    """Load DeepLabV3-ResNet50 pre-trained on COCO."""
     print("[*] Loading DeepLabV3 on {} ...".format(DEVICE))
     model = models.segmentation.deeplabv3_resnet50(
         weights=models.segmentation.DeepLabV3_ResNet50_Weights.COCO_WITH_VOC_LABELS_V1
@@ -191,6 +277,7 @@ def preprocess(image):
 
 
 def run_segmentation(model, image):
+    """Run DeepLabV3 and return (color_mask, class_mask)."""
     input_tensor = preprocess(image)
     with torch.no_grad():
         output = model(input_tensor)["out"][0]
@@ -203,6 +290,7 @@ def run_segmentation(model, image):
 
 
 def seg_stats(mask):
+    """Return list of (class_name, percentage) for classes > 0.5% coverage."""
     total = mask.size
     stats = []
     for cls_id, name in enumerate(CLASS_NAMES):
@@ -215,6 +303,7 @@ def seg_stats(mask):
 
 
 def seg_result(orig, seg_rgb, stats, title, save_path):
+    """Save three-panel segmentation figure."""
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     axes[0].imshow(orig.resize((512, 512)))
     axes[0].set_title("Input: {}".format(title), fontsize=12, fontweight="bold")
@@ -233,56 +322,79 @@ def seg_result(orig, seg_rgb, stats, title, save_path):
     print("[OK] {} -> {}".format(title, save_path))
 
 
-# ---- Main -----------------------------------------------------------------
+# ========== Main =============================================================
 
 def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     print("=" * 60)
     print("  Remote Sensing AI Analysis Demo")
-    print("  GEE Data + K-Means + Deep Learning Segmentation")
+    print("  [Track 1] Synthetic RS Image + K-Means Land Cover")
+    print("  [Track 2] DeepLabV3 Semantic Segmentation Pipeline")
     print("=" * 60)
 
-    # Track 1: GEE Analysis
-    print("\n--- Track 1: GEE Remote Sensing Analysis ---")
-    gee_name = analyze_gee()
+    # ---- Track 1: K-Means Land Cover Classification ----
+    print("\n--- Track 1: Land Cover Classification (K-Means) ---")
 
-    # Track 2: Deep Learning Segmentation
+    rs_image = generate_synthetic_rs_image()
+    rs_image.save(os.path.join(RESULTS_DIR, "synthetic_rs_input.png"))
+    print("[OK] Synthetic RS image generated (512x512)")
+
+    stats = analyze_kmeans(rs_image, n_clusters=6,
+                           title="Synthetic RS Image",
+                           save_path=os.path.join(RESULTS_DIR,
+                                                  "kmeans_landcover.png"))
+    print("\n  Land cover summary (by area):")
+    for cid, pct, center in stats:
+        label = "Cluster {}".format(cid)
+        print("    {:12s}  {:5.1f}%".format(label, pct))
+
+    # Optional: also analyze GEE data if available
+    if os.path.isdir(GEE_DIR):
+        gee_files = sorted([f for f in os.listdir(GEE_DIR)
+                            if f.lower().endswith((".png", ".jpg"))])
+        gee_preferred = sorted([f for f in gee_files if "final" in f.lower()])
+        if gee_preferred or gee_files:
+            chosen = gee_preferred[0] if gee_preferred else gee_files[0]
+            print("\n[*] Also found GEE data: {} (bonus analysis)".format(chosen))
+            gee_img = Image.open(os.path.join(GEE_DIR, chosen)).convert("RGB")
+            analyze_kmeans(gee_img, n_clusters=5,
+                           title="GEE: " + chosen,
+                           save_path=os.path.join(RESULTS_DIR,
+                                                  "gee_kmeans_result.png"))
+
+    # ---- Track 2: DeepLabV3 Segmentation ----
     print("\n--- Track 2: Deep Learning Segmentation ---")
+    print("  Note: DeepLabV3 is pre-trained on COCO (real photos).")
+    print("  For production RS use, fine-tune on remote sensing datasets.\n")
+
     model = load_model()
 
-    # 2a: Synthetic urban scene
-    print("\n[2a] Urban scene generation + segmentation ...")
+    print("\n[2a] Synthetic urban scene segmentation ...")
     urban = make_urban_scene()
     urban.save(os.path.join(RESULTS_DIR, "urban_input.png"))
     seg, mask = run_segmentation(model, urban)
-    stats = seg_stats(mask)
-    for n, p in stats:
+    seg_stats_list = seg_stats(mask)
+    for n, p in seg_stats_list:
         print("    {:20s} {:5.1f}%".format(n, p))
-    seg_result(urban, seg, stats, "urban_scene",
+    seg_result(urban, seg, seg_stats_list, "urban_scene",
                os.path.join(RESULTS_DIR, "urban_segmentation.png"))
 
-    # 2b: Screenshot segmentation
-    print("\n[2b] Screenshot segmentation ...")
-    try:
-        screenshot = ImageGrab.grab().resize((512, 512))
-    except Exception:
-        screenshot = make_urban_scene()
-    screenshot.save(os.path.join(RESULTS_DIR, "screenshot_input.png"))
-    seg2, mask2 = run_segmentation(model, screenshot)
-    stats2 = seg_stats(mask2)
-    for n, p in stats2:
+    print("\n[2b] Synthetic RS image segmentation ...")
+    seg_rs, mask_rs = run_segmentation(model, rs_image)
+    seg_stats_rs = seg_stats(mask_rs)
+    for n, p in seg_stats_rs:
         print("    {:20s} {:5.1f}%".format(n, p))
-    seg_result(screenshot, seg2, stats2, "screenshot",
-               os.path.join(RESULTS_DIR, "screenshot_segmentation.png"))
+    seg_result(rs_image, seg_rs, seg_stats_rs, "rs_image",
+               os.path.join(RESULTS_DIR, "rs_segmentation.png"))
 
+    # ---- Summary ----
     print("\n" + "=" * 60)
-    print("  Done! Output files:")
-    print("  1. results/gee_kmeans_result.png")
-    if gee_name:
-        print("     (GEE composite: {})".format(gee_name))
-    print("  2. results/urban_segmentation.png")
-    print("  3. results/screenshot_segmentation.png")
+    print("  Done! Output files in 'results/':")
+    print("  1. synthetic_rs_input.png   (generated satellite-like image)")
+    print("  2. kmeans_landcover.png     (K-means land cover classification)")
+    print("  3. urban_segmentation.png   (DeepLabV3 on urban scene)")
+    print("  4. rs_segmentation.png      (DeepLabV3 on RS image)")
     print("=" * 60)
 
 
