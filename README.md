@@ -11,14 +11,28 @@
 | `imagenet_classes.py` | ImageNet 1000 类名称映射表（离线，无需网络） |
 | `requirements.txt` | Python 依赖 |
 
-## 快速开始
+## 技术栈
+
+- **语言:** Python 3.9+
+- **深度学习:** PyTorch, torchvision (DeepLabV3-ResNet50, ResNet50)
+- **机器学习:** scikit-learn (K-Means 聚类)
+- **数据处理:** NumPy, Pillow (影像生成与处理)
+- **可视化:** Matplotlib (分类结果图表)
+
+## 用法
 
 ```bash
+# 1. 安装依赖
 pip install -r requirements.txt
+
+# 2. 运行主程序（合成遥感影像 + K-Means地物分类 + DeepLabV3分割）
 python rs_analysis.py
+
+# 3. （可选）运行场景分类
+python scene_classifier.py
 ```
 
-无需任何外部数据 — 程序会自动生成合成遥感影像并进行分析。
+无需任何外部数据 — 程序会自动生成合成遥感影像并进行分析。所有输出保存在 `results/` 文件夹。
 
 ## 技术方案
 
