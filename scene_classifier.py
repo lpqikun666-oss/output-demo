@@ -13,7 +13,7 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from PIL import Image, ImageGrab
+from PIL import Image
 import torch
 import torchvision.transforms as T
 from torchvision import models
@@ -22,34 +22,9 @@ from imagenet_classes import CLASS_MAP
 
 
 RESULTS_DIR = "results"
+GEE_INPUT_DIR = "gee_inputs"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Broad scene categories relevant to remote sensing
-SCENE_CATEGORIES = {
-    "Urban / Built-up": ["palace", "castle", "skyscraper", "shopping center", "street sign",
-                         "traffic light", "parking meter", "park bench", "restaurant",
-                         "shop", "bookstore", "supermarket", "library", "church",
-                         "temple", "mosque", "stadium", "highway", "apartment building",
-                         "fountain", "lamp post", "crosswalk", "bridge", "dam"],
-    "Vegetation / Forest": ["tree", "forest", "jungle", "palm tree", "pine tree", "oak tree",
-                            "maple", "evergreen", "shrub", "fern", "moss", "rainforest",
-                            "bamboo", "cactus", "grass", "lawn", "meadow", "park"],
-    "Water / Wetland": ["lake", "ocean", "sea", "river", "stream", "pond", "waterfall",
-                        "swamp", "marsh", "wetland", "reef", "coast", "shore",
-                        "beach", "harbor", "dock", "boat", "ship", "submarine"],
-    "Agricultural / Crop": ["farm", "barn", "haystack", "tractor", "harvester", "corn",
-                            "wheat field", "rice paddy", "orchard", "vineyard",
-                            "greenhouse", "garden", "cattle", "sheep", "goat"],
-    "Desert / Barren": ["desert", "sand", "dune", "canyon", "cliff", "mountain",
-                        "volcano", "rock", "stone", "boulder", "cave", "butte",
-                        "mesa", "plateau", "badlands"],
-    "Snow / Ice": ["snow", "ice", "glacier", "iceberg", "snowmobile", "ski resort",
-                   "ski", "snowboard", "igloo", "polar"],
-    "Residential": ["house", "mobile home", "tepee", "hut", "cabin", "log cabin",
-                    "village", "townhouse", "trailer", "doghouse"],
-}
-
-# Broad keywords for automatic categorization
 BROAD_CATEGORIES = {
     "Urban": ["palace", "castle", "skyscraper", "church", "temple", "mosque", "stadium",
               "apartment", "house", "building", "shop", "store", "restaurant", "library",
@@ -83,33 +58,29 @@ BROAD_CATEGORIES = {
 
 
 def get_image():
-    """Get input image - webcam photo or screenshot."""
-    webcam_path = os.path.join(RESULTS_DIR, "webcam_photo.jpg")
-    if os.path.exists(webcam_path):
-        print("[*] Using webcam photo ...")
-        img = Image.open(webcam_path).convert("RGB")
+    """Load a remote sensing image from GEE outputs for analysis."""
+    gee_dir = GEE_INPUT_DIR
+    if os.path.isdir(gee_dir):
+        images = sorted([f for f in os.listdir(gee_dir)
+                         if f.lower().endswith((".png", ".jpg", ".jpeg"))])
     else:
-        # Try to capture from webcam
-        try:
-            import cv2
-            cap = cv2.VideoCapture(0)
-            if cap.isOpened():
-                print("[*] Capturing webcam photo ...")
-                ret, frame = cap.read()
-                cap.release()
-                if ret:
-                    cv2.imwrite(webcam_path, frame)
-                    img = Image.open(webcam_path).convert("RGB")
-                else:
-                    raise RuntimeError("Frame capture failed")
-            else:
-                raise RuntimeError("Camera not available")
-        except Exception as e:
-            print("    Webcam unavailable ({}), using screenshot ...".format(e))
-            img = ImageGrab.grab().resize((512, 512))
-            img.save(os.path.join(RESULTS_DIR, "input_scene.png"))
-    print("    Image size: {}".format(img.size))
-    return img
+        images = []
+
+    if not images:
+        print("[!] No GEE images found. Falling back to screenshot ...")
+        from PIL import ImageGrab
+        img = ImageGrab.grab().resize((512, 512))
+        img.save(os.path.join(RESULTS_DIR, "fallback_input.png"))
+        return img, "fallback_screenshot"
+
+    # Use the NDVI_final or first available image as demo input
+    preferred = [f for f in images if "final" in f.lower()]
+    chosen = preferred[0] if preferred else images[0]
+    img_path = os.path.join(gee_dir, chosen)
+
+    print("[*] Loading remote sensing image: {}".format(chosen))
+    img = Image.open(img_path).convert("RGB")
+    return img, chosen
 
 
 def load_model():
@@ -164,19 +135,14 @@ def categorize(predictions):
     return sorted(category_scores.items(), key=lambda x: x[1], reverse=True)
 
 
-def save_results(image, predictions, categories, save_path):
+def save_results(image, predictions, categories, img_name, save_path):
     """Save visual results with classification info."""
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
     # Left: input image
     axes[0].imshow(image.resize((512, 512)))
-    axes[0].set_title("Input Scene", fontsize=14, fontweight="bold")
+    axes[0].set_title("Remote Sensing Input\n{}".format(img_name), fontsize=12, fontweight="bold")
     axes[0].axis("off")
-
-    # Add a border-like annotation
-    axes[0].text(0.5, -0.02, "Screenshot captured for analysis",
-                 transform=axes[0].transAxes, ha="center", fontsize=9,
-                 style="italic", color="grey")
 
     # Right: predictions bar chart
     names = [p["name"][:25] for p in predictions]
@@ -210,18 +176,18 @@ def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     print("=" * 60)
-    print("  AI Scene Classification Demo")
-    print("  Model: ResNet50 | Task: Scene Understanding")
+    print("  AI + Remote Sensing Scene Classification Demo")
+    print("  Model: ResNet50 | Task: Land Cover / Scene Understanding")
     print("=" * 60)
 
     # 1. Get input
-    image = get_image()
+    image, img_name = get_image()
 
     # 2. Load model
     model = load_model()
 
     # 3. Classify
-    print("[*] Classifying scene ...")
+    print("[*] Classifying remote sensing scene ...")
     predictions = classify(model, image)
 
     # 4. Categorize
@@ -237,7 +203,7 @@ def main():
         print("  {}: {}%".format(cat, score))
 
     # 6. Save visualization
-    save_results(image, predictions, categories,
+    save_results(image, predictions, categories, img_name,
                  os.path.join(RESULTS_DIR, "classification_result.png"))
 
     print("\n" + "=" * 60)
