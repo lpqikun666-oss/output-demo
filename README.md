@@ -1,59 +1,33 @@
-# Remote Sensing AI Demo
+# Output-Demo
 
-AI-powered scene classification and image analysis, built with PyTorch + ResNet50.
+遥感科学与技术本科毕业设计成果。
 
-## Overview
+## 内容
 
-This project demonstrates how deep learning models can be used for scene understanding and image classification — a core technique in remote sensing and geospatial analysis. The same deep learning approach is used for:
+- `梁品仟初稿 - 暂定.docx` — 毕业论文
 
-- Land cover / land use classification from satellite imagery
-- Urban change detection
-- Vegetation health monitoring
-- Natural disaster assessment
+## AI 遥感场景分类 Demo
 
-## How It Works
+本项目提供了一个基于 PyTorch + ResNet50 的 AI 场景分类演示，展示深度学习在地理空间分析中的应用。
 
-1. **Input**: Captures a photo via webcam (or falls back to screenshot)
-2. **Model**: Uses pre-trained ResNet50 (ImageNet) to classify the scene
-3. **Output**: Generates a chart showing top predictions and scene categories
+详见 [scene_classifier.py](scene_classifier.py)。
 
-## Results
+### 技术栈
 
-The script outputs visual results in the `results/` folder:
+- Python / PyTorch / torchvision
+- ResNet50 预训练模型（迁移学习）
+- OpenCV 摄像头采集
+- Matplotlib 可视化
 
-| File | Description |
-|---|---|
-| `webcam_photo.jpg` | Captured input image |
-| `classification_result.png` | Side-by-side view: input + top predictions chart |
-| `segmentation_map.png` | (if using DeepLabV3) Pixel-wise classification |
-| `overlay.png` | (if using DeepLabV3) Input blended with segmentation |
-
-## Usage
+### 用法
 
 ```bash
 pip install -r requirements.txt
 python scene_classifier.py
 ```
 
-## Techniques Demonstrated
+## 专业方向
 
-- **Transfer Learning**: Using pre-trained models (no training from scratch)
-- **Convolutional Neural Networks (CNNs)**: The backbone of modern image AI
-- **Scene Classification**: Categorizing an image into semantic classes
-- **Semantic Segmentation**: (DeepLabV3 mode) Classifying every pixel
-
-## Tech Stack
-
-- Python 3.9+
-- PyTorch / torchvision
-- ResNet50 (pre-trained on ImageNet)
-- OpenCV (webcam capture)
-- Matplotlib (visualization)
-
-## Author
-
-桂林理工大学 遥感科学与技术
-
-## License
-
-MIT
+- 遥感科学与技术
+- AI + 遥感影像分析
+- GIS 空间数据处理
